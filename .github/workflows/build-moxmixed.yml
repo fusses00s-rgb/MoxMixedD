@@ -11,53 +11,90 @@ permissions:
 
 jobs:
   build:
+    name: Build MoxMixed Android APK
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout project
         uses: actions/checkout@v4
 
       - name: Extract project ZIP
+        shell: bash
         run: |
-          ARCHIVE=$(find . -maxdepth 1 -name '*.zip' -print -quit)
+          ARCHIVE=$(find . -maxdepth 1 -type f -name '*.zip' -print -quit)
+
           if [ -z "$ARCHIVE" ]; then
-            echo "Project ZIP not found"
+            echo "ERROR: ZIP archive not found"
             exit 1
           fi
+
           mkdir source
           unzip -q "$ARCHIVE" -d source
-          PROJECT_DIR=$(find source -name settings.gradle.kts -print -quit | xargs dirname)
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "Gradle project not found"
+
+          PROJECT_FILE=$(find source -name settings.gradle.kts -print -quit)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: Gradle project not found"
             exit 1
           fi
+
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
+          echo "Project found: $PROJECT_DIR"
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platform-tools
+            platforms;android-37
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build APK
+      - name: Build MoxMixed APK
+        shell: bash
         run: |
           cd "$PROJECT_DIR"
           chmod +x ./gradlew
+
           ./gradlew :composeApp:assembleRemoteDebug \
             -PposterRemoteScheme=https \
             -PposterRemoteHost=moxmixed.example \
             -PposterRemotePort=443 \
             --no-daemon
 
+      - name: Verify APK
+        shell: bash
+        run: |
+          APK="$PROJECT_DIR/composeApp/build/outputs/apk/remote/debug/composeApp-remote-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "APK NOT FOUND"
+            find "$PROJECT_DIR" -type f -name '*.apk'
+            exit 1
+          fi
+
+          echo "APK successfully created!"
+          ls -lh "$APK"
+          sha256sum "$APK" > "$APK.sha256"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MoxMixed-debug-apk
-          path: source/**/build/outputs/apk/remote/debug/*.apk
+          name: MoxMixed-APK
+          path: |
+            ${{ env.PROJECT_DIR }}/composeApp/build/outputs/apk/remote/debug/*.apk
+            ${{ env.PROJECT_DIR }}/composeApp/build/outputs/apk/remote/debug/*.sha256
           if-no-files-found: error
           retention-days: 14
